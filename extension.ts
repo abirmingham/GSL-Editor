@@ -1,13 +1,15 @@
 import * as path from 'path'
 import * as fs from 'fs'
+import * as os from 'os'
 
 import {
     ExtensionContext, StatusBarAlignment, Disposable, DocumentSelector,
     Uri, QuickPickItem, StatusBarItem, OutputChannel,
-    TextDocument, Diagnostic, DiagnosticCollection
+    TextDocument, Diagnostic, DiagnosticCollection, WorkspaceEdit,
 } from 'vscode'
 
 import { workspace, window, commands, languages, extensions } from 'vscode'
+
 
 import {
     LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, DiagnosticSeverity
@@ -29,13 +31,16 @@ import {
     ScriptProperties,
     ScriptCompileResults,
     withEditorClient,
-    EditorClientInterface
+    EditorClientInterface,
+    ClientTask
 } from './gsl/editorClient'
 import { formatDate } from './gsl/util/dateUtil'
 import { OutOfDateButtonManager } from './gsl/status_bar/scriptOutOfDateButton'
 import { scriptNumberFromFileName } from './gsl/util/scriptUtil'
-import { GSLX_AUTOMATIC_DOWNLOADS, GSLX_DEV_ACCOUNT, GSLX_DEV_CHARACTER, GSLX_DEV_INSTANCE, GSLX_DEV_PASSWORD, GSLX_DISABLE_LOGIN, GSLX_ENABLE_SCRIPT_SYNC_CHECKS, GSLX_NEW_INSTALL_FLAG, GSLX_SAVED_VERSION, GSL_LANGUAGE_ID } from './gsl/const'
+import { GSLX_AUTOMATIC_DOWNLOADS, GSLX_DEV_ACCOUNT, GSLX_DEV_CHARACTER, GSLX_DEV_INSTANCE, GSLX_DEV_PASSWORD, GSLX_DISABLE_LOGIN, GSLX_ENABLE_SCRIPT_SYNC_CHECKS, GSLX_NEW_INSTALL_FLAG, GSLX_SAVED_VERSION, GSLX_USE_PRETTIER_FORMATTING, GSL_LANGUAGE_ID } from './gsl/const'
 import { FrozenScriptWarningManager } from './gsl/status_bar/frozenScriptWarning'
+
+import { getPrettierSuggestedEdits, isReadyForPrettier } from './gsl/prettier'
 
 const rx_script_number = /^\d{1,5}$/
 const rx_script_number_in_filename = /(\d+)\.gsl/
@@ -62,6 +67,10 @@ export class GSLExtension {
     static init (context: ExtensionContext) {
         this.context = context
         this.diagnostics = languages.createDiagnosticCollection()
+    }
+
+    static getDiagnostics (documentUri: Uri): readonly Diagnostic[] {
+        return this.diagnostics.get(documentUri) || []
     }
 
     static getDownloadLocation (): string {
@@ -219,7 +228,7 @@ export class GSLExtension {
         }
     }
 
-    static requiresUploadConfirmation (
+    private static requiresUploadConfirmation (
         script: number,
         newestProperties: ScriptProperties
     ): { prompt: string } | undefined {
@@ -354,6 +363,7 @@ export class VSCodeIntegration {
             { label: "Open development terminal", name: 'gsl.openTerminal' },
             { label: "Connect to development server", name: 'gsl.openConnection' },
             { label: "User Setup", name: 'gsl.userSetup' },
+            { label: "Apply Prettier Formatting (Experimental)", name: 'gsl.runPrettier' },
         ]
 
         this.outputChannel = window.createOutputChannel("GSL Editor (debug)")
@@ -700,6 +710,50 @@ export class VSCodeIntegration {
         }
     }
 
+    private async commandRunPrettier () {
+        if (!els?.lspClient) throw new Error('Language server not initialized')
+
+        const editor = window.activeTextEditor
+        const document = editor?.document
+        if (!document) throw new Error('Failed to find document')
+
+        const readyStatus = isReadyForPrettier(document)
+        if (!readyStatus.isReady) {
+            return void window.showWarningMessage(readyStatus.reason)
+        }
+        const suggestedEdit = await getPrettierSuggestedEdits(
+            els.lspClient,
+            document,
+            editor.selection.isEmpty ? undefined : editor.selection
+        )
+        if (!suggestedEdit) {
+            return void window.showInformationMessage('No formatting changes needed.')
+        }
+        const { before, after, suggested } = suggestedEdit
+
+        const beforeFilename = path.join(os.tmpdir(), 'prettier.before.gsl')
+        const afterFilename = path.join(os.tmpdir(), 'prettier.after.gsl')
+        fs.writeFileSync(beforeFilename, before)
+        fs.writeFileSync(afterFilename, after)
+
+        commands.executeCommand(
+            'vscode.diff',
+            Uri.file(beforeFilename),
+            Uri.file(afterFilename),
+            'Prettier Formatting Diff'
+        )
+        const confirmation = await window.showInformationMessage('Apply formatted changes?', 'Yes', 'No')
+
+        if (confirmation === 'Yes') {
+            const edit = new WorkspaceEdit()
+            edit.replace(document.uri, suggested.range, suggested.newText)
+            await workspace.applyEdit(edit)
+        }
+        if (window.activeTextEditor?.document.fileName === afterFilename) {
+            await commands.executeCommand('workbench.action.closeActiveEditor')
+        }
+    }
+
     private registerCommands () {
         let subscription: Disposable
         subscription = commands.registerCommand('gsl.downloadScript', this.commandDownloadScript, this)
@@ -721,6 +775,8 @@ export class VSCodeIntegration {
         subscription = commands.registerCommand('gsl.openConnection', this.commandOpenConnection, this)
         this.context.subscriptions.push(subscription)
         subscription = commands.registerCommand('gsl.openTerminal', this.commandOpenTerminal, this)
+        this.context.subscriptions.push(subscription)
+        subscription = commands.registerCommand('gsl.runPrettier', this.commandRunPrettier, this)
         this.context.subscriptions.push(subscription)
     }
 
@@ -817,9 +873,7 @@ export class VSCodeIntegration {
     * function of the same name for convienence of ensuring preconditions and
     * passing common parameters.
     */
-    async withEditorClient <T>(
-        task: (client: EditorClientInterface) => T
-    ): Promise<T | undefined> {
+    async withEditorClient<T> (task: ClientTask<T>): Promise<T | undefined> {
         if (workspace.getConfiguration(GSL_LANGUAGE_ID).get(GSLX_DISABLE_LOGIN)) {
             return void window.showErrorMessage("Game login is disabled")
         }
@@ -855,50 +909,53 @@ export class VSCodeIntegration {
 }
 
 class ExtensionLanguageServer {
+    public lspClient: LanguageClient | undefined
     private context: ExtensionContext
-    private lspClient: LanguageClient
 
     constructor (context: ExtensionContext) {
         this.context = context
-        this.lspClient = this.startLanguageServer()
     }
 
-    private startLanguageServer () {
-        const relativePath = path.join('gsl-language-server', 'out', 'server.js')
+    public startLanguageServer(): void {
+        const relativePath = path.join(
+            'gsl-language-server',
+            'server.js'
+        )
         const module = this.context.asAbsolutePath(relativePath)
-        const options = { execArgv: [ '--nolazy', '--inspect=6009' ] }
+        const options = { execArgv: ['--nolazy', '--inspect=6009'] }
         const transport = TransportKind.ipc
 
         const serverOptions: ServerOptions = {
-                run: { module, transport },
-                debug: { module, transport, options }
+            run: { module, transport },
+            debug: { module, transport, options },
         }
 
         const clientOptions: LanguageClientOptions = {
-                documentSelector: [{ scheme: 'file', language: GSL_LANGUAGE_ID }],
-                synchronize: {
-                        fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
-                }
+            documentSelector: [{ scheme: '*', language: GSL_LANGUAGE_ID }]
         }
 
-        const lspClient = new LanguageClient (
-                'gslLanguageServer',
-                'GSL Language Server',
-                serverOptions,
-                clientOptions
+        this.lspClient = new LanguageClient(
+            'gslLanguageServer',
+            'GSL Language Server',
+            serverOptions,
+            clientOptions
         )
+        this.lspClient.start()
+    }
 
-        lspClient.start()
-
-        return lspClient
+    public stopLanguageServer(): void {
+        if (!this.lspClient) return
+        this.lspClient.stop()
     }
 }
 
 export let vsc: VSCodeIntegration | undefined = undefined
+let els: ExtensionLanguageServer | undefined = undefined
 
 export function activate (context: ExtensionContext) {
     vsc = new VSCodeIntegration (context)
-    // const els = new ExtensionLanguageServer (context)
+    els = new ExtensionLanguageServer (context)
+    els.startLanguageServer()
 
     EAccessClient.console = {
         log: (...args: any) => { vsc!.outputGameChannel(args.join(' ')) }
@@ -941,7 +998,11 @@ export function activate (context: ExtensionContext) {
     context.subscriptions.push(subscription)
 
     subscription = languages.registerDocumentFormattingEditProvider(
-        selector, new GSLDocumentFormattingEditProvider()
+        selector,
+        new GSLDocumentFormattingEditProvider(
+            workspace.getConfiguration(GSL_LANGUAGE_ID).get(GSLX_USE_PRETTIER_FORMATTING) === true,
+            els.lspClient
+        )
     )
     context.subscriptions.push(subscription)
 
@@ -949,5 +1010,6 @@ export function activate (context: ExtensionContext) {
     vsc.checkForUpdatedVersion()
 }
 
-export function deactivate () {
+export function deactivate() {
+    if (els) els.stopLanguageServer()
 }

@@ -5,5 +5,4 @@ scripts/
 **/tsconfig.json
 **/.gitignore
 **/.vscodeignore
-gsl-language-server/src/*
 .vscode/

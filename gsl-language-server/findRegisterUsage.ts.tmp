@@ -1,0 +1,189 @@
+// // Function to create hover information
+// function onHover(params: TextDocumentPositionParams): Hover | null {
+//     // let result = 'Found nothing';
+//     let ruleContext;
+//     try {
+//         const parseResult = parseResultMap.get(params.textDocument.uri);
+//         if (parseResult) {
+//             ruleContext = findRuleContext(parseResult.tokenStream, parseResult.syntaxTree, params);
+//         }
+//         // if (ruleContext) {
+//         //     const parentCallMatch = findParentCallMatch(ruleContext);
+//         //     if (parentCallMatch instanceof CallmatchContext) {
+//         //         const mmAddress = findMatchMarkerAddress(parentCallMatch);
+//         //         if (mmAddress?.script === VAR_THIS_SCRIPT) {
+//         //             const mm = findMatchMarkerContext(mmAddress, lastTree);
+//         //             if (mm) {
+//         //                 const mods = [...findVariableWritesInMm(mm)];
+//         //                 mods.sort();
+//         //                 result = mods.length === 0 ? 'No variable modifications' : `Modifies: ${mods.join(', ')}`;
+//         //             }
+//         //             else {
+//         //                 result = `Not found in this script: ${mmAddress.name}`
+//         //             }
+//         //         }
+//         //     }
+//         // }
+//         console.log(ruleContext);
+//     } catch (e) {
+//         console.error(e);
+//     }
+
+//     let content = '';
+//     if (DEBUG) {
+//         content += "\n\nDEBUG INFO:\n\n```\n";
+//         content += (ruleContext === undefined ? 'undefined' : printTreeString(ruleContext));
+//         content += "\n```";
+//     }
+
+//     if (content) {
+//         return {
+//             contents: {
+//                 kind: 'markdown',
+//                 value: content
+//             }
+//         };
+//     }
+
+//     return null; // Return null if no hover information is available
+// }
+
+// const findParentCallMatch = (ruleContext: ParserRuleContext): ParserRuleContext | undefined => {
+//     let currentCtx: ParserRuleContext | undefined = ruleContext;
+//     while (currentCtx) {
+//         const ruleName = lastParser.ruleNames[currentCtx.ruleIndex];
+//         if (ruleName === 'callmatch') return ruleContext;
+//         currentCtx = currentCtx.parent;
+//     }
+// }
+
+const VAR_THIS_SCRIPT = '$THISSCRIPT';
+
+interface MatchMarkerAddress {
+    name: string;
+    script: (typeof VAR_THIS_SCRIPT) | number;
+}
+
+const tryParseNumber = (str: string): number | undefined => {
+    if (str === 'NaN') return;
+    const asFloat = Number.parseFloat(str);
+    if (asFloat.toString() !== str) return;
+    return asFloat;
+}
+
+const trimQuotes = (str: string): string => {
+    return str.substring(1, str.length - 1);
+}
+
+// const findMatchMarkerAddress = (ruleContext: CallmatchContext): MatchMarkerAddress | undefined => {
+//     const children = ruleContext.children;
+//     if (!children || children[2] === undefined || children[4] === undefined) return;
+//     const name = children[2].text;
+//     const script = children[4].text;
+//     const scriptAsNum = tryParseNumber(script);
+//     if (script !== VAR_THIS_SCRIPT && scriptAsNum === undefined) {
+//         console.error(`Unexpected script name: ${scriptAsNum}`);
+//         return undefined;
+//     }
+//     return {
+//         name: trimQuotes(name),
+//         script: scriptAsNum !== undefined ? scriptAsNum : VAR_THIS_SCRIPT
+//     };
+// }
+
+const findMatchMarkerContext = (address: MatchMarkerAddress, tree: ParserRuleContext, depth = 0): MatchMarkerContext | undefined => {
+    if (!tree.children || depth > 5) return; // depth should never reach 5
+    for (let i = 0; i < tree.children.length; i++) {
+        const child = tree.children[i];
+        if (child instanceof MatchMarkerContext) {
+            return child;
+        }
+        if (child instanceof StatementContext) {
+            const mm = findMatchMarkerContext(address, child, depth + 1);
+            if (!mm) continue;
+            const mmChildren = mm.children;
+            if (mmChildren && mmChildren[1] && trimQuotes(mmChildren[1].getText()) === address.name) {
+                return mm;
+            }
+        }
+    }
+}
+
+
+const isStatementWithFastPush = (tree: StatementContext): boolean => {
+    if (!tree.getChildCount()) return false;
+    const child = tree.getChild(0);
+    return child instanceof FastpushContext;
+}
+const isStatementWithFastPop = (tree: StatementContext): boolean => {
+    if (!tree.getChildCount()) return false;
+    const child = tree.getChild(0);
+    return child instanceof FastpushContext;
+}
+
+type WriteRule = SetContext; // TODO add other write types
+
+const isWriteRule = (tree: ParseTree): tree is WriteRule => {
+    return tree instanceof SetContext;
+}
+
+const getWriteVariable = (tree: WriteRule): string | undefined => {
+    if (tree instanceof SetContext) {
+        return tree.getChild(1)?.getText();
+    }
+}
+
+interface VariableWritesMemo {
+    names: Set<string>;
+    fastPushDepth: number;
+    pushDepth: number;
+}
+
+const findVariableWritesInMm = (tree: MatchMarkerContext): Set<string> => {
+    const memo = {
+        names: new Set<string>(),
+        fastPushDepth: 0,
+        pushDepth: 0
+    };
+    variableWritesHelper(tree, memo);
+    return memo.names;
+};
+
+const variableWritesHelper = (tree: ParseTree, memo: VariableWritesMemo): void => {
+    // TODO regular push
+    if (tree instanceof StatementContext) {
+        if (isStatementWithFastPush(tree)) {
+            memo.fastPushDepth += 1;
+            return;
+        }
+        if (isStatementWithFastPop(tree)) {
+            memo.fastPushDepth -= 1;
+            return;
+        }
+    }
+    for (let i = 0; i < tree.getChildCount(); i++) {
+        const child = tree.getChild(i);
+        if (!child) continue;
+        if (isWriteRule(child)) {
+            // TODO are nodes and system variables handled?
+            const varName = getWriteVariable(child);
+            if (!varName) {
+                console.error('Expected var name in ', child);
+                return;
+            }
+            if (varName.startsWith('B')) {
+                memo.names.add(varName);
+            }
+            else if (varName.startsWith('T')) {
+                // TODO regular push
+                memo.names.add(varName);
+            }
+            else if (memo.fastPushDepth === 0) {
+                memo.names.add(varName);
+            }
+        }
+        else {
+            variableWritesHelper(child, memo);
+        }
+    };
+};

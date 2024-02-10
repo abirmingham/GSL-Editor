@@ -11,7 +11,8 @@
             "outFiles": [
                 "${workspaceRoot}/extension.js",
                 "${workspaceRoot}/gsl/**/*.js",
-                "${workspaceRoot}/gsl-language-server/**/*.js"
+                "${workspaceRoot}/gsl-language-server/**/*.js",
+                "${workspaceRoot}/antlr/**/*.js",
             ],
             "autoAttachChildProcesses": true
         }

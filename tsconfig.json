@@ -10,6 +10,6 @@
 		"outDir": ".",
 		"rootDir": "."
 	},
-	"include": ["extension.ts","gsl","gsl-language-server"],  
+	"include": ["extension.ts","gsl","gsl-language-server", "antlr", "gsl-prettier"],  
 	"exclude": ["node_modules", ".vscode-test"]
 }
