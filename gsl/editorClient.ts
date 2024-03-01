@@ -13,6 +13,23 @@ export interface ScriptProperties {
     lines: number
 }
 
+export const ScriptProperties = {
+    serialize: (props: ScriptProperties): SerializedScriptProperties => ({
+        ...props,
+        // Convert date to ISO string, otherwise momento object will toString()
+        lastModifiedDate: props.lastModifiedDate.toISOString()
+    }),
+    deserialize: (props: SerializedScriptProperties): ScriptProperties =>({
+        ...props,
+        lastModifiedDate: new Date(props.lastModifiedDate) // restore from ISO string
+    })
+}
+
+/** Same as `ScriptProperties` except not lossy to `JSON.stringify()` */
+export type SerializedScriptProperties = Omit<ScriptProperties, 'lastModifiedDate'> & {
+    lastModifiedDate: string
+}
+
 export interface ScriptCompileResults {
     status: ScriptCompileStatus,
     script: number,
@@ -203,7 +220,28 @@ export class EditorClient extends BaseGameClient {
             this.trySend(`/${(typeof script === 'number' ? 'ms' : 'mv')} ${script}`)
         })
     }
-    
+
+    exitModifyScript (): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(
+                () => {
+                    this.off('text', processText)
+                    reject('Modification exit timed out.')
+                },
+                delay
+            );
+            const processText = (text:string) => output.accumulate(text)
+            const output = new OutputProcessor((line: string) => {
+                if (!line.match(rx_aborted)) return
+                this.off('text', processText)
+                clearTimeout(timeout)
+                resolve()
+            })
+            this.on('text', processText)
+            this.trySend('Q')
+        })
+    }
+
     captureScript (): Promise<string> {
         return new Promise ((resolve, reject) => {
             const captureFailed = (reason: string) => {
