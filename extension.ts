@@ -67,7 +67,7 @@ export class GSLExtension {
         return extPath
     }
 
-    static async downloadScript (script: number | string, gotoDef?: string) {
+    static async downloadScript (script: number | string) {
         const error: any = (e: Error) => { error.caught = e }
         const downloadPath = this.getDownloadLocation()
         const fileExtension = workspace.getConfiguration(GSL_LANGUAGE_ID).get('fileExtension')
@@ -84,19 +84,6 @@ export class GSLExtension {
                 if (content) {
                     if (content.slice(-2) !== '\r\n') { content += '\r\n' }
                     fs.writeFileSync(scriptPath, content)
-                }
-            }
-            // open the script file and maybe navigagte to definition
-            const document = await workspace.openTextDocument(scriptPath)
-            const editor = await window.showTextDocument(document, { preview: false })
-            if (gotoDef) {
-                const gotoRegExp = new RegExp(`:\s+${gotoDef}`)
-                for (let n = 0, nn = document.lineCount; n < nn; n++) {
-                    const line = document.lineAt(n)
-                    if (line.text.match(gotoRegExp)) {
-                        commands.executeCommand('revealLine', { lineNumber: n, at: 'center' })
-                        break
-                    }
                 }
             }
             this.vsc.recordScriptProperties(script, scriptProperties)
