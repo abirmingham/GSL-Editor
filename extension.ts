@@ -385,7 +385,9 @@ class VSCodeIntegration {
                     const {scriptNumber, scriptPath, syncStatus} = result
                     window.setStatusBarMessage(`Script downloaded: ${scriptPath}`, 5000)
                     if (syncStatus && !syncStatus.match(/All instances in sync/i)) {
-                        window.showWarningMessage(`Script ${scriptNumber} Status: ${syncStatus}`)
+                        window.showInformationMessage(
+                            `Instances out of sync. ${syncStatus} (s${scriptNumber})`
+                        )
                     }
                     await window.showTextDocument(
                         await workspace.openTextDocument(scriptPath),
