@@ -1,16 +1,17 @@
 import * as path from 'path'
 import * as fs from 'fs'
+import * as os from 'os'
 
 import {
     ExtensionContext, StatusBarAlignment, Disposable, DocumentSelector,
     Uri, QuickPickItem, StatusBarItem, OutputChannel,
-    TextDocument, Diagnostic, DiagnosticCollection, Extension
+    TextDocument, Diagnostic, DiagnosticCollection, Extension, ThemeColor
 } from 'vscode'
 
 import { env, workspace, window, commands, languages, extensions } from 'vscode'
 
 import {
-    LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, DiagnosticSeverity
+    LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, DiagnosticSeverity, Command
 } from 'vscode-languageclient/node'
 
 import {
@@ -38,6 +39,8 @@ const GSLX_AUTOMATIC_DOWNLOADS = 'automaticallyDownloadScripts'
 const GSLX_ENABLE_SCRIPT_SYNC_CHECKS = 'enableScriptSyncChecks'
 const rx_script_number = /^\d{1,5}$/
 const rx_script_number_in_filename = /(\d+)\.gsl/
+
+let isDownloading = false
 
 interface LastSeenScriptModification {
     modifier: string
@@ -88,37 +91,45 @@ export class GSLExtension {
     static async downloadScript (
         client: EditorClientInterface,
         script: number | string,
-        checkSyncStatus = false
     ): Promise<DownloadScriptResult> {
-        const downloadPath = this.getDownloadLocation()
+        isDownloading = true
         try {
             // Get script properties, keeping editor open
             const scriptProperties = await client.modifyScript(script, true).catch((e: any) => {
                 throw new Error(`Failed to get script properties: ${e.message}`)
             })
             // Write file
-            const scriptFile = scriptProperties.path.split('/').pop()!
-            const scriptPath = path.join(downloadPath, scriptFile)
+            const destinationPath = path.join(
+                this.getDownloadLocation(),
+                scriptProperties.path.split('/').pop()!
+            )
             if (scriptProperties.new) {
-                fs.writeFileSync(scriptPath, "")
+                fs.writeFileSync(destinationPath, "")
                 await client.exitModifyScript()
             } else {
+                // Note that captureScript closes modifyScript
                 let content = await client.captureScript().catch((e) => {
                     throw new Error(`Failed to download script: ${e.message}`)
                 })
                 if (content) {
                     if (content.slice(-2) !== '\r\n') { content += '\r\n' }
-                    fs.writeFileSync(scriptPath, content)
+                    fs.writeFileSync(destinationPath, content)
                 }
             }
             // Record script modification info
-            const scriptNumber = Number(scriptFile.match(rx_script_number_in_filename)![1])
+            const scriptNumber = Number(
+                path.basename(destinationPath)
+                    .match(rx_script_number_in_filename)![1]
+            )
             if (Number.isNaN(scriptNumber)) throw new Error('Expected script number, not NaN')
             this.recordScriptModification(
                 scriptNumber,
                 scriptProperties.modifier,
                 scriptProperties.lastModifiedDate,
             )
+            const checkSyncStatus = workspace
+                .getConfiguration(GSL_LANGUAGE_ID)
+                .get(GSLX_ENABLE_SCRIPT_SYNC_CHECKS)
             let syncStatus = undefined
             if (checkSyncStatus) {
                 syncStatus = await client.showScriptCheckStatus(scriptNumber).catch((e: any) => {
@@ -129,7 +140,7 @@ export class GSLExtension {
             return {
                 scriptNumber,
                 scriptProperties,
-                scriptPath,
+                scriptPath: destinationPath,
                 syncStatus
             }
         }
@@ -138,6 +149,9 @@ export class GSLExtension {
             // to exit the editor when something goes wrong.
             await client.exitModifyScript()
             throw e
+        }
+        finally {
+            isDownloading = false
         }
     }
 
@@ -170,6 +184,7 @@ export class GSLExtension {
             lines.push(document.lineAt(n).text)
         }
         if (lines[lines.length - 1] !== '') { lines.push('') }
+        // Note that sendScript closes modifyScript
         let compileResults = await client.sendScript(lines, scriptProperties.new)
         // Verify success
         if (compileResults.status === ScriptCompileStatus.Failed) {
@@ -247,6 +262,7 @@ export class GSLExtension {
         modifier: string,
         lastModifiedDate: Date
     ): void {
+        console.log('wtf')
         this.context.globalState.update(
             this.scriptPropsKey(script),
             { modifier, lastModifiedDate: lastModifiedDate.toISOString() }
@@ -278,6 +294,234 @@ export class GSLExtension {
     }
 }
 
+
+/**
+ * When a user navigates to a new file, checks to see if that file is
+ * up-to-date. If it is not, displays a button. Clicking on the
+ * button allows for learning more and taking action.
+ */
+class ScriptUpToDateChecker {
+    private SHOW_DIFF = 'Show Diff'
+    private UPDATE_LOCAL_COPY = 'Update Local Copy'
+    private STOP_CHECKING = 'Stop checking for this version of this script'
+    private DIFF_FILE_A = 'old.gsl'
+    private DIFF_FILE_B = 'new.gsl'
+    /**
+     * This is a local cache of file names to ignore. We use this to
+     * prevent us from bugging the person in the case where we cannot
+     * identify a script number for some reason.
+    */
+    private ignoreFileCache: Set<string>
+    constructor(
+        private button: StatusBarItem,
+        private withEditorClient: VSCodeIntegration["withEditorClient"],
+        private showDownloadedScript: VSCodeIntegration["showDownloadedScript"],
+        private context: ExtensionContext
+    ) {
+        this.ignoreFileCache = new Set()
+    }
+    activate() {
+        return window.onDidChangeActiveTextEditor(async (editor) => {
+            this.button.hide()
+            if (!editor) return
+            // Downloaded files automatically open in a new editor. We
+            // don't to bypass the staleness check for these files.
+            if (isDownloading) return
+            // Only check GSL files
+            const {document} = editor
+            if (document.languageId !== GSL_LANGUAGE_ID) return
+            // Verify game access is possible
+            const password = await this.context.secrets.get(GSLX_DEV_PASSWORD)
+            if (!password) return // no credentials - cannot proceed
+            // Verify not viewing a diff with this same tool
+            const {uri} = document
+            if (
+                uri.path.endsWith(this.DIFF_FILE_A) ||
+                uri.path.endsWith(this.DIFF_FILE_B)
+            ) {
+                return
+            }
+            await this.withEditorClient(async client => {
+                if (window.activeTextEditor?.document.uri !== document.uri) {
+                    return // this async code is stale
+                }
+                const shouldShowButton = await this.shouldShowButton(client, document)
+                if (window.activeTextEditor?.document.uri !== document.uri) {
+                    return // this async code is stale
+                }
+                if (shouldShowButton) {
+                    this.button.show()
+                } else {
+                    this.button.hide()
+                }
+            })
+        })
+    }
+    async showModal(): Promise<void> {
+        await this.withEditorClient(async client => {
+            const document = window.activeTextEditor?.document
+            if (!document) return
+
+            // Ask user for action
+            const confirmation = await window.showInformationMessage(
+                "The server's version of this script is newer than your local version",
+                { modal: true },
+                this.SHOW_DIFF,
+                this.UPDATE_LOCAL_COPY,
+                this.STOP_CHECKING
+            )
+            const scriptNum = this.getScriptNumber(document)
+            if (!scriptNum) return
+
+            // Take action
+            switch (confirmation) {
+                case undefined:
+                    return
+                case this.SHOW_DIFF:
+                    await this.showDiff(client, scriptNum, document)
+                    return
+                case this.UPDATE_LOCAL_COPY:
+                    this.button.hide()
+                    const result = await GSLExtension.downloadScript(
+                        client,
+                        scriptNum,
+                    )
+                    if (!result) {
+                        window.showErrorMessage('Failed to download script')
+                        return
+                    }
+                    if (document.uri.fsPath !== result.scriptPath) {
+                        window.showWarningMessage(
+                            'Script downloaded, but download directory is different' +
+                            ' than original file directory. The old file will remain' +
+                            ' and the warning button will not appear again for the ' +
+                            ' old file until a new server version is seen.' +
+                            `\nOld file: ${document.uri.fsPath}` +
+                            `\nNew file: ${result.scriptPath}`
+                        )
+                    }
+                    this.showDownloadedScript(result)
+                    return
+                case this.STOP_CHECKING:
+                    await this.stopCheckingScript(client, scriptNum, document.fileName)
+                    return
+                default:
+                    console.error('Unexpected confirmation', confirmation)
+                    return
+            }
+        })
+    }
+    private getScriptNumber(document: TextDocument): number | undefined {
+        const scriptNum = Number(scriptNumberFromFileName(document.fileName))
+        if (!scriptNum || Number.isNaN(scriptNum)) {
+            console.error(
+                `Failed to extract script number from file name: ${document.fileName}`
+            )
+            return
+        }
+        return scriptNum
+    }
+    /**
+     * @returns true if the local script is older than the server script
+     * AND the scripts' content does not match. Otherwise returns false.
+     * We compare the content of the scripts because it is possible that
+     * the user has updated the script via git rather than through the
+     * vs code gsl command, and we do not want to bug the user in that case.
+     */
+    private async shouldShowButton(
+        client: EditorClientInterface,
+        document: TextDocument
+    ): Promise<boolean> {
+        if (this.ignoreFileCache.has(document.fileName)) return false
+        const scriptNum = this.getScriptNumber(document)
+        if (!scriptNum) return false
+        // Decide whether to show the button
+        if (window.activeTextEditor?.document.uri !== document.uri) return false
+        const lastSeenMod = GSLExtension.findLastSeenScriptModification(scriptNum)
+        const scriptProperties = await client.modifyScript(scriptNum)
+        console.log({lastSeenMod, scriptProperties})
+        if (
+            lastSeenMod &&
+            lastSeenMod.lastModifiedDate.toISOString() === scriptProperties.lastModifiedDate.toISOString()
+        ) {
+            // Script has not been changed since we downloaded it
+            return false
+        }
+        // Script has changed since we downloaded it. Let's compare the
+        // scripts to see if we care.
+        await client.modifyScript(scriptNum, true)
+        const newScript = await client.captureScript() // closes modifyScript
+        console.log('comparing diffs')
+        return this.normalizeScriptContents(document.getText())
+            !== this.normalizeScriptContents(newScript)
+    }
+    private normalizeScriptContents(contents: string): string {
+        return contents.replaceAll(/\r?\n/g, '\n').trim()
+    }
+    /**
+     * Display a diff to the user of the local vs remote script.
+     */
+    private async showDiff(
+        client: EditorClientInterface,
+        scriptNum: number,
+        document: TextDocument
+    ): Promise<void> {
+        await client.modifyScript(scriptNum, true)
+        const newScript = await client.captureScript() // closes modifyScript
+        try {
+            // Create a temporary directory
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-'));
+            const oldFilePath = path.join(tempDir, 'old.gsl');
+            const newFilePath = path.join(tempDir, 'new.gsl');
+            // Write content to temporary files
+            fs.writeFileSync(
+                oldFilePath,
+                this.normalizeScriptContents(document.getText())
+            );
+            fs.writeFileSync(
+                newFilePath,
+                this.normalizeScriptContents(newScript)
+            );
+            // Open diff view
+            await commands.executeCommand(
+                'vscode.diff',
+                Uri.file(oldFilePath),
+                Uri.file(newFilePath),
+                'Diff: old.gsl ↔ new.gsl'
+            );
+        } catch (error) {
+            window.showErrorMessage('Error comparing GSL files: ' + error);
+        }
+
+    }
+    private async stopCheckingScript(
+        client: EditorClientInterface,
+        scriptNum: number,
+        fileName: string
+    ): Promise<void> {
+        const scriptProperties = await GSLExtension.checkModifiedDate(
+            client,
+            scriptNum
+        ) || GSLExtension.findLastSeenScriptModification(scriptNum)?.lastModifiedDate
+        if (!scriptProperties) {
+            console.error('Failed to find script properties', scriptNum)
+            this.ignoreFileCache.add(fileName)
+            return
+        }
+        this.context.globalState.update(
+            this.getIgnoreKey(scriptNum, scriptProperties),
+            true
+        )
+    }
+    private getIgnoreKey(
+        script: number,
+        modDate: Date
+    ): string {
+        return `ScriptUpToDateChecker.ignore_version.${script}.`
+            + modDate.toISOString()
+    }
+}
+
 function scriptNumberFromFileName (fileName: string): string {
     return path.basename(fileName).replace(/\D+/g,'').replace(/^0+/,'')
 }
@@ -290,6 +534,7 @@ class VSCodeIntegration {
     private downloadButton: StatusBarItem
     private uploadButton: StatusBarItem
     private gslButton: StatusBarItem
+    private scriptUpToDateButton: StatusBarItem
 
     private commandList: Array<QuickPickCommandItem>
 
@@ -305,6 +550,7 @@ class VSCodeIntegration {
         this.downloadButton = window.createStatusBarItem(StatusBarAlignment.Left, 50)
         this.uploadButton = window.createStatusBarItem(StatusBarAlignment.Left, 50)
         this.gslButton = window.createStatusBarItem(StatusBarAlignment.Left, 50)
+        this.scriptUpToDateButton = window.createStatusBarItem(StatusBarAlignment.Left, 55)
 
         this.commandList = [
             { label: "Download Script", name: 'gsl.downloadScript' },
@@ -315,7 +561,7 @@ class VSCodeIntegration {
             { label: "Toggle output logging", name: 'gsl.toggleLogging' },
             { label: "Open development terminal", name: 'gsl.openTerminal' },
             { label: "Connect to development server", name: 'gsl.openConnection' },
-            { label: "User Setup", name: 'gsl.userSetup' }
+            { label: "User Setup", name: 'gsl.userSetup' },
         ]
 
         this.outputChannel = window.createOutputChannel("GSL Editor (debug)")
@@ -342,6 +588,28 @@ class VSCodeIntegration {
         if (workspace.getConfiguration(GSL_LANGUAGE_ID).get('displayGameChannel')) {
             this.outputChannel.show(true);
         }
+
+        // Watch active editor for files that are stale relative to the server.
+        // If a stale file is seen, show the stale file button, subtly prompting
+        // the user to refresh the local copy.
+        this.scriptUpToDateButton.text = "$(alert) Old Version of Script"
+        this.scriptUpToDateButton.backgroundColor = new ThemeColor('statusBarItem.warningBackground')
+        this.scriptUpToDateButton.color = new ThemeColor('statusBarItem.warningForeground')
+        this.scriptUpToDateButton.tooltip = 'Click to learn more'
+        const command = 'internalOutOfDate'
+        this.scriptUpToDateButton.command = command
+        const scriptStaleChecker = new ScriptUpToDateChecker(
+            this.scriptUpToDateButton,
+            this.withEditorClient.bind(this),
+            this.showDownloadedScript.bind(this),
+            this.context
+        )
+        commands.registerCommand(
+            'internalOutOfDate',
+            scriptStaleChecker.showModal,
+            scriptStaleChecker
+        )
+        this.context.subscriptions.push(scriptStaleChecker.activate())
     }
 
     /* commands */
@@ -376,23 +644,10 @@ class VSCodeIntegration {
                 for (script of scriptList) {
                     const result = await GSLExtension.downloadScript(
                         client,
-                        script,
-                        workspace
-                            .getConfiguration(GSL_LANGUAGE_ID)
-                            .get(GSLX_ENABLE_SCRIPT_SYNC_CHECKS)
+                        script
                     )
                     if (!result) continue
-                    const {scriptNumber, scriptPath, syncStatus} = result
-                    window.setStatusBarMessage(`Script downloaded: ${scriptPath}`, 5000)
-                    if (syncStatus && !syncStatus.match(/All instances in sync/i)) {
-                        window.showInformationMessage(
-                            `Instances out of sync. ${syncStatus} (s${scriptNumber})`
-                        )
-                    }
-                    await window.showTextDocument(
-                        await workspace.openTextDocument(scriptPath),
-                        { preview: false }
-                    )
+                    await this.showDownloadedScript(result)
                 }
             })
         }
@@ -401,6 +656,19 @@ class VSCodeIntegration {
             const error = `Failed to download script ${script}`
             window.showErrorMessage((e instanceof Error) ? `${error} (${e.message})` : error)
         }
+    }
+    private async showDownloadedScript(result: DownloadScriptResult) {
+        const {scriptNumber, scriptPath, syncStatus} = result
+        window.setStatusBarMessage(`Script downloaded: ${scriptPath}`, 5000)
+        if (syncStatus && !syncStatus.match(/All instances in sync/i)) {
+            window.showInformationMessage(
+                `Instances out of sync. ${syncStatus} (s${scriptNumber})`
+            )
+        }
+        await window.showTextDocument(
+            await workspace.openTextDocument(scriptPath),
+            { preview: false }
+        )
     }
 
     private async commandUploadScript () {
@@ -447,7 +715,7 @@ class VSCodeIntegration {
                     client,
                     scriptNum,
                     document
-                )
+                ) // closes modifyScript
                 if (!compileResults) return
                 // Display compilation feedback
                 if (compileResults.status === ScriptCompileStatus.Failed) {
