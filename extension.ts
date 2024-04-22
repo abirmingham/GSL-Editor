@@ -36,6 +36,7 @@ import {
 import { assertNever } from './gsl/util/typeUtil'
 import { formatDate } from './gsl/util/dateUtil'
 import { showQuickPick } from './gsl/dialog/QuickPick'
+import { editClientCommands, runClientCommands } from './gsl/clientCommands'
 
 const GSL_LANGUAGE_ID = 'gsl'
 const GSLX_DEV_ACCOUNT = 'developmentAccount'
@@ -1058,6 +1059,16 @@ class VSCodeIntegration {
         }
     }
 
+    private async commandEditClientCommands () {
+        await editClientCommands(GSLExtension.getDownloadLocation())
+    }
+
+    private async commandRunClientCommands () {
+        await this.withEditorClient(async client => {
+            await runClientCommands(GSLExtension.getDownloadLocation(), client)
+        })
+    }
+
     private registerCommands () {
         let subscription: Disposable
         subscription = commands.registerCommand('gsl.downloadScript', this.commandDownloadScript, this)
@@ -1079,6 +1090,10 @@ class VSCodeIntegration {
         subscription = commands.registerCommand('gsl.openConnection', this.commandOpenConnection, this)
         this.context.subscriptions.push(subscription)
         subscription = commands.registerCommand('gsl.openTerminal', this.commandOpenTerminal, this)
+        this.context.subscriptions.push(subscription)
+        subscription = commands.registerCommand('gsl.editClientCommands', this.commandEditClientCommands, this)
+        this.context.subscriptions.push(subscription)
+        subscription = commands.registerCommand('gsl.runClientCommands', this.commandRunClientCommands, this)
         this.context.subscriptions.push(subscription)
     }
 

@@ -29,7 +29,8 @@
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0",
-    "vscode-languageserver": "^8.1.0"
+    "vscode-languageserver": "^8.1.0",
+    "yaml": "^2.4.1"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.1",
@@ -93,6 +94,16 @@
       {
         "command": "gsl.openConnection",
         "title": "Open Development Server Connection",
+        "category": "GSL"
+      },
+      {
+        "command": "gsl.editClientCommands",
+        "title": "Edit Client Commands",
+        "category": "GSL"
+      },
+      {
+        "command": "gsl.runClientCommands",
+        "title": "Run Client Commands",
         "category": "GSL"
       }
     ],
