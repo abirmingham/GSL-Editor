@@ -3,6 +3,8 @@ import { Pseudoterminal, EventEmitter, window, Terminal } from "vscode";
 
 import { BaseGameClient } from "./gameClients";
 
+const MAX_OUTPUT_BUFFER_LINES = 1000;
+
 export class GameTerminal {
     private terminal: Terminal
 
@@ -15,6 +17,9 @@ export class GameTerminal {
     private ptyInputIndex: number
     private ptyOriginalInput: string
     private ptyInputHistory: Array<string>
+
+    /** Circular buffer storing recent terminal output for MCP access */
+    private outputBuffer: string[] = []
 
     private clearInput () {
         if (this.ptyInputBuffer.length > 0) {
@@ -141,6 +146,46 @@ export class GameTerminal {
 
     hide () { this.terminal.hide() }
 
+    /** Append text to the output buffer, trimming to max size */
+    private appendToOutputBuffer(text: string) {
+        // Split by lines, handling \r\n
+        const lines = text.split(/\r?\n/)
+        for (const line of lines) {
+            if (line.length > 0) {
+                this.outputBuffer.push(line)
+            }
+        }
+        // Trim to max size
+        while (this.outputBuffer.length > MAX_OUTPUT_BUFFER_LINES) {
+            this.outputBuffer.shift()
+        }
+    }
+
+    /** Get recent terminal output lines */
+    getRecentOutput(lineCount: number = 100): string[] {
+        const start = Math.max(0, this.outputBuffer.length - lineCount)
+        return this.outputBuffer.slice(start)
+    }
+
+    /** Clear the output buffer */
+    clearOutputBuffer() {
+        this.outputBuffer = []
+    }
+
+    /** Send a command to the game (for MCP write access) */
+    sendCommand(command: string): boolean {
+        if (!this.gameClient) {
+            return false
+        }
+        this.gameClient.send(command, true)
+        return true
+    }
+
+    /** Check if terminal is connected to a game client */
+    isConnected(): boolean {
+        return Boolean(this.gameClient)
+    }
+
     bindClient (client: BaseGameClient) {
         if (this.gameClient === client) return
         if (this.gameClient) { throw new Error ("Game client is already bound?") }
@@ -170,6 +215,7 @@ export class GameTerminal {
         }
 
         const handleClientText = (text: string) => {
+            this.appendToOutputBuffer(text)
             if (this.ptyInputBuffer.length > 0) {
                 this.writeEmitter.fire('\u001b[' + this.ptyInputBuffer.length + 'D\u001b[K')
                 this.writeEmitter.fire(text)
@@ -180,6 +226,7 @@ export class GameTerminal {
         }
 
         const handleClientEcho = (text: string) => {
+            this.appendToOutputBuffer(text)
             if (this.ptyInputBuffer.length > 0) {
                 this.writeEmitter.fire('\u001b[' + this.ptyInputBuffer.length + 'D\u001b[K')
                 this.writeEmitter.fire(text)

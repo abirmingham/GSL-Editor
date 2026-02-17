@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"gsl-terminal": {
+			"type": "stdio",
+			"command": "node",
+			"args": ["C:/Users/alexx/git/GSL-Editor/gsl-mcp-server/dist/index.js"]
+		}
+	}
+}

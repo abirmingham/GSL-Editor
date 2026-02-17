@@ -40,6 +40,7 @@ import { FrozenScriptWarningManager } from './gsl/status_bar/frozenScriptWarning
 import { getAlignCommentsAction, GSLCodeActionProvider } from './gsl/codeActionProvider'
 import { subscribeToDocumentChanges } from './gsl/diagnostics';
 import { formatIndentation } from './gsl/util/formattingUtil';
+import { TerminalBridge } from './gsl/terminalBridge';
 
 const rx_script_number = /^\d{1,5}$/
 const rx_script_number_in_filename = /(\d+)\.gsl/
@@ -333,6 +334,8 @@ export class VSCodeIntegration {
 
     private gameTerminal?: GameTerminal
 
+    private terminalBridge?: TerminalBridge
+
     private loggingEnabled: boolean
 
     private frozenScriptWarningManager: FrozenScriptWarningManager | undefined
@@ -359,6 +362,8 @@ export class VSCodeIntegration {
             { label: "Connect to development server", name: 'gsl.openConnection' },
             { label: "User Setup", name: 'gsl.userSetup' },
             { label: "Format Document Indentation", name: 'gsl.formatIndentation' },
+            { label: "Start MCP Bridge", name: 'gsl.startMcpBridge' },
+            { label: "Stop MCP Bridge", name: 'gsl.stopMcpBridge' },
         ]
 
         this.outputChannel = window.createOutputChannel("GSL Editor (debug)")
@@ -392,6 +397,41 @@ export class VSCodeIntegration {
         else {
             this.frozenScriptWarning.hide()
         }
+
+        // Initialize the terminal bridge (but don't start it automatically)
+        this.terminalBridge = new TerminalBridge(() => this.gameTerminal)
+    }
+
+    private async commandStartMcpBridge() {
+        if (!this.terminalBridge) {
+            this.terminalBridge = new TerminalBridge(() => this.gameTerminal)
+        }
+        
+        if (this.terminalBridge.isRunning()) {
+            window.showInformationMessage('MCP bridge is already running on port 19532')
+            return
+        }
+        
+        try {
+            const port = await this.terminalBridge.start()
+            this.outputChannel.appendLine(`[MCP Bridge] Terminal bridge started on port ${port}`)
+            window.showInformationMessage(`MCP bridge started on port ${port}`)
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : String(e)
+            this.outputChannel.appendLine(`[MCP Bridge] Failed to start terminal bridge: ${errorMessage}`)
+            window.showErrorMessage(`Failed to start MCP bridge: ${errorMessage}`)
+        }
+    }
+
+    private async commandStopMcpBridge() {
+        if (!this.terminalBridge || !this.terminalBridge.isRunning()) {
+            window.showInformationMessage('MCP bridge is not running')
+            return
+        }
+        
+        await this.terminalBridge.stop()
+        this.outputChannel.appendLine('[MCP Bridge] Terminal bridge stopped')
+        window.showInformationMessage('MCP bridge stopped')
     }
 
     private initializeComponents () {
@@ -840,6 +880,10 @@ export class VSCodeIntegration {
         subscription = commands.registerCommand('gsl.formatIndentation', this.commandFormatIndentation, this)
         this.context.subscriptions.push(subscription)
         subscription = commands.registerCommand('gsl.alignComments', this.commandAlignComments, this)
+        this.context.subscriptions.push(subscription)
+        subscription = commands.registerCommand('gsl.startMcpBridge', this.commandStartMcpBridge, this)
+        this.context.subscriptions.push(subscription)
+        subscription = commands.registerCommand('gsl.stopMcpBridge', this.commandStopMcpBridge, this)
         this.context.subscriptions.push(subscription)
     }
 

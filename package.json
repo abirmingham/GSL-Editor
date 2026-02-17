@@ -47,11 +47,13 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run bundle && cd gsl-language-server && npm run compile",
-    "postinstall": "cd gsl-language-server && npm ci && cd ..",
+    "postinstall": "cd gsl-language-server && npm ci && cd gsl-mcp-server && npm ci && cd ..",
     "compile": "tsc -b",
     "bundle": "esbuild extension.ts --bundle --outfile=extension.js --external:vscode --format=cjs --platform=node",
     "watch": "tsc --watch",
-    "test": "node test/runTests.js"
+    "test": "node test/runTests.js",
+    "mcp:build": "cd gsl-mcp-server && npm run build",
+    "mcp:install": "cd gsl-mcp-server && npm ci"
   },
   "main": "extension",
   "contributes": {
@@ -109,6 +111,16 @@
       {
         "command": "gsl.alignComments",
         "title": "Align Document Comments",
+        "category": "GSL"
+      },
+      {
+        "command": "gsl.startMcpBridge",
+        "title": "Start MCP Bridge",
+        "category": "GSL"
+      },
+      {
+        "command": "gsl.stopMcpBridge",
+        "title": "Stop MCP Bridge",
         "category": "GSL"
       }
     ],
