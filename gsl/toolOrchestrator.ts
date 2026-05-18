@@ -4,14 +4,15 @@ import {
     InitOptions,
     ScriptCompileResults,
     ScriptCompileStatus,
-    withEditorClient,
-    withPrimeEditorClient,
+    withClientForInstance,
 } from "./editorClient";
 import { throwOnControlCharacters } from "./strings";
 
 // ---------------------------------------------------------------------------
 // Dependencies
 // ---------------------------------------------------------------------------
+
+export type GameInstance = "dev" | "prime" | "shattered" | "platinum" | "test";
 
 export interface LoginCredentials {
     account: string;
@@ -21,8 +22,9 @@ export interface LoginCredentials {
 }
 
 export interface ToolOrchestratorDeps {
-    getDevCredentials(): Promise<LoginCredentials | undefined>;
-    getPrimeCredentials(): Promise<LoginCredentials | undefined>;
+    getCredentials(
+        instance: GameInstance,
+    ): Promise<LoginCredentials | undefined>;
     getCurrentAuthor(): string | undefined;
     getDownloadLocation(): string;
     console: { log: (...args: any[]) => void };
@@ -37,12 +39,10 @@ export class ToolOrchestrator {
 
     // -- credential helpers ------------------------------------------------
 
-    private async devInitOptions(): Promise<InitOptions> {
-        const creds = await this.deps.getDevCredentials();
+    private async initOptionsFor(instance: GameInstance): Promise<InitOptions> {
+        const creds = await this.deps.getCredentials(instance);
         if (!creds) {
-            throw new Error(
-                "Dev server not configured. Run 'GSL: User Setup' first.",
-            );
+            throw new Error(`${instance} server not configured.`);
         }
         return {
             login: creds,
@@ -53,28 +53,15 @@ export class ToolOrchestrator {
         };
     }
 
-    private async primeInitOptions(): Promise<InitOptions> {
-        const creds = await this.deps.getPrimeCredentials();
-        if (!creds) {
-            throw new Error(
-                "Prime server not configured. Run 'GSL: User Setup' first.",
-            );
-        }
-        return {
-            login: creds,
-            console: this.deps.console,
-            downloadLocation: this.deps.getDownloadLocation(),
-            loggingEnabled: false,
-            onCreate: () => {},
-        };
-    }
-
-    private async withDevClient<T>(task: ClientTask<T>): Promise<T> {
-        return withEditorClient(await this.devInitOptions(), task);
-    }
-
-    private async withPrimeClient<T>(task: ClientTask<T>): Promise<T> {
-        return withPrimeEditorClient(await this.primeInitOptions(), task);
+    private async withClient<T>(
+        instance: GameInstance,
+        task: ClientTask<T>,
+    ): Promise<T> {
+        return withClientForInstance(
+            instance,
+            await this.initOptionsFor(instance),
+            task,
+        );
     }
 
     // -- executeShowCommand ------------------------------------------------
@@ -101,7 +88,7 @@ export class ToolOrchestrator {
     }
 
     private async executeShowCommandOnInstance(
-        instance: "prime" | "dev",
+        instance: GameInstance,
         command: string,
         captureStart: RegExp,
         captureEnd: RegExp,
@@ -119,11 +106,7 @@ export class ToolOrchestrator {
                 includeEndLine,
             );
 
-        if (instance === "prime") {
-            return this.withPrimeClient(task);
-        }
-
-        return this.withDevClient(task);
+        return this.withClient(instance, task);
     }
 
     // -- tool methods ------------------------------------------------------
@@ -132,10 +115,7 @@ export class ToolOrchestrator {
         return this.deps.getCurrentAuthor();
     }
 
-    async getRoomData(
-        roomId: number,
-        instance: "prime" | "dev",
-    ): Promise<string> {
+    async getRoomData(roomId: number, instance: GameInstance): Promise<string> {
         return this.executeShowCommandOnInstance(
             instance,
             `/sr ${roomId}`,
@@ -147,7 +127,7 @@ export class ToolOrchestrator {
 
     async getExistenceData(
         existenceId: number,
-        instance: "prime" | "dev",
+        instance: GameInstance,
     ): Promise<string> {
         return this.executeShowCommandOnInstance(
             instance,
@@ -161,7 +141,7 @@ export class ToolOrchestrator {
     async getPlayerVarfields(
         playerName: string,
         verbosity: "Full" | "NoTables" | "SkipDefaults",
-        instance: "prime" | "dev",
+        instance: GameInstance,
     ): Promise<string> {
         throwOnControlCharacters(playerName);
         return this.executeShowCommandOnInstance(
@@ -175,7 +155,7 @@ export class ToolOrchestrator {
 
     async executeAgentCommand(
         command: string,
-        instance: "prime" | "dev",
+        instance: GameInstance,
     ): Promise<string> {
         throwOnControlCharacters(command);
         const fullCommand = command ? `/agent ${command}` : `/agent`;
@@ -189,9 +169,12 @@ export class ToolOrchestrator {
         );
     }
 
-    async getVerbData(verb: string): Promise<string> {
+    async getVerbData(
+        verb: string,
+        instance: GameInstance = "dev",
+    ): Promise<string> {
         throwOnControlCharacters(verb);
-        return this.withDevClient((client) =>
+        return this.withClient(instance, (client) =>
             this.executeShowCommand(
                 client,
                 `/sv ${verb}`,
@@ -205,7 +188,7 @@ export class ToolOrchestrator {
     }
 
     async getScriptData(scriptId: number, gameCode: string): Promise<string> {
-        return this.withDevClient((client) =>
+        return this.withClient("dev", (client) =>
             this.executeShowCommand(
                 client,
                 `/ss ${scriptId} ${gameCode} raw`,
@@ -218,8 +201,11 @@ export class ToolOrchestrator {
         );
     }
 
-    async getGlobalTableData(tableId: number): Promise<string> {
-        return this.withDevClient((client) =>
+    async getGlobalTableData(
+        tableId: number,
+        instance: GameInstance = "dev",
+    ): Promise<string> {
+        return this.withClient(instance, (client) =>
             this.executeShowCommand(
                 client,
                 `/sl ${tableId}`,
@@ -237,7 +223,7 @@ export class ToolOrchestrator {
     async fetchPrimeScript(
         script: number,
     ): Promise<{ content: string; isNew: boolean }> {
-        const raw = await this.withPrimeClient(async (client) => {
+        const raw = await this.withClient("prime", async (client) => {
             const props = await client.modifyScript(script, true);
             if (props.new) {
                 await client.exitModifyScript();
@@ -261,7 +247,7 @@ export class ToolOrchestrator {
     async fetchDevScript(
         script: number,
     ): Promise<{ content: string; isNew: boolean }> {
-        const raw = await this.withDevClient(async (client) => {
+        const raw = await this.withClient("dev", async (client) => {
             const props = await client.modifyScript(script, true);
             if (props.new) {
                 await client.exitModifyScript();
@@ -313,7 +299,7 @@ export class ToolOrchestrator {
         if (!content || content.match(/^\s*$/)) {
             throw new Error("Cannot upload an empty script file.");
         }
-        return this.withDevClient(async (client) => {
+        return this.withClient("dev", async (client) => {
             const props = await client.modifyScript(SAFETY_SCRIPT, true);
             try {
                 const lines = content.split(/\r?\n/);

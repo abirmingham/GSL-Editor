@@ -4,6 +4,7 @@ import {
     ToolOrchestrator,
     ToolOrchestratorDeps,
     LoginCredentials,
+    GameInstance,
 } from "../../gsl/toolOrchestrator";
 
 // ---------------------------------------------------------------------------
@@ -24,12 +25,17 @@ const PRIME_CREDS: LoginCredentials = {
     password: "testpass",
 };
 
+const ALL_CREDS: Record<string, LoginCredentials> = {
+    dev: DEV_CREDS,
+    prime: PRIME_CREDS,
+};
+
 function makeDeps(
     overrides: Partial<ToolOrchestratorDeps> = {},
 ): ToolOrchestratorDeps {
     return {
-        getDevCredentials: async () => DEV_CREDS,
-        getPrimeCredentials: async () => PRIME_CREDS,
+        getCredentials: async (instance: GameInstance) =>
+            ALL_CREDS[instance] as LoginCredentials | undefined,
         getCurrentAuthor: () => "AlexB/Nyxus",
         getDownloadLocation: () => "/tmp/gsl",
         console: { log: () => {} },

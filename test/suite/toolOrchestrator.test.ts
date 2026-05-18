@@ -3,6 +3,7 @@ import {
     ToolOrchestrator,
     ToolOrchestratorDeps,
     LoginCredentials,
+    GameInstance,
 } from "../../gsl/toolOrchestrator";
 
 // ---------------------------------------------------------------------------
@@ -23,16 +24,31 @@ const PRIME_CREDS: LoginCredentials = {
     password: "testpass",
 };
 
+const ALL_CREDS: Record<string, LoginCredentials> = {
+    dev: DEV_CREDS,
+    prime: PRIME_CREDS,
+};
+
 function makeDeps(
     overrides: Partial<ToolOrchestratorDeps> = {},
 ): ToolOrchestratorDeps {
     return {
-        getDevCredentials: async () => DEV_CREDS,
-        getPrimeCredentials: async () => PRIME_CREDS,
+        getCredentials: async (instance: GameInstance) =>
+            ALL_CREDS[instance] as LoginCredentials | undefined,
         getCurrentAuthor: () => "AlexB/Nyxus",
         getDownloadLocation: () => "/tmp/gsl-test",
         console: { log: () => {} },
         ...overrides,
+    };
+}
+
+function depsWithout(
+    ...instances: GameInstance[]
+): Partial<ToolOrchestratorDeps> {
+    const excluded = new Set(instances);
+    return {
+        getCredentials: async (instance: GameInstance) =>
+            excluded.has(instance) ? undefined : ALL_CREDS[instance],
     };
 }
 
@@ -58,103 +74,81 @@ suite("ToolOrchestrator", () => {
     // -- credential error handling -----------------------------------------
 
     test("getRoomData throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.getRoomData(100, "dev"), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("getRoomData on prime throws when prime credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getPrimeCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("prime")));
         await assert.rejects(() => orch.getRoomData(100, "prime"), {
-            message: /Prime server not configured/,
+            message: /prime server not configured/,
         });
     });
 
     test("getExistenceData throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.getExistenceData(200, "dev"), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("getPlayerVarfields throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(
             () => orch.getPlayerVarfields("TestPlayer", "Full", "dev"),
-            { message: /Dev server not configured/ },
+            { message: /dev server not configured/ },
         );
     });
 
     test("getVerbData throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.getVerbData("sit"), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("getScriptData throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.getScriptData(123, "GS4D"), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("getGlobalTableData throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.getGlobalTableData(5), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("executeAgentCommand throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.executeAgentCommand("testcmd", "dev"), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("fetchPrimeScript throws when prime credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getPrimeCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("prime")));
         await assert.rejects(() => orch.fetchPrimeScript(100), {
-            message: /Prime server not configured/,
+            message: /prime server not configured/,
         });
     });
 
     test("fetchDevScript throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(() => orch.fetchDevScript(100), {
-            message: /Dev server not configured/,
+            message: /dev server not configured/,
         });
     });
 
     test("uploadAndCompileScript throws when dev credentials missing", async () => {
-        const orch = new ToolOrchestrator(
-            makeDeps({ getDevCredentials: async () => undefined }),
-        );
+        const orch = new ToolOrchestrator(makeDeps(depsWithout("dev")));
         await assert.rejects(
             () => orch.uploadAndCompileScript("some content"),
-            { message: /Dev server not configured/ },
+            { message: /dev server not configured/ },
         );
     });
 

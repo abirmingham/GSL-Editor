@@ -245,8 +245,11 @@
                         "instance": {
                             "type": "string",
                             "enum": [
+                                "dev",
                                 "prime",
-                                "dev"
+                                "shattered",
+                                "platinum",
+                                "test"
                             ],
                             "default": "dev",
                             "description": "Which server instance to query. Defaults to 'dev', which is typically preferred."
@@ -275,8 +278,11 @@
                         "instance": {
                             "type": "string",
                             "enum": [
+                                "dev",
                                 "prime",
-                                "dev"
+                                "shattered",
+                                "platinum",
+                                "test"
                             ],
                             "default": "dev",
                             "description": "Which server instance to query. Defaults to 'dev', which is typically preferred."
@@ -315,8 +321,11 @@
                         "instance": {
                             "type": "string",
                             "enum": [
+                                "dev",
                                 "prime",
-                                "dev"
+                                "shattered",
+                                "platinum",
+                                "test"
                             ],
                             "default": "dev",
                             "description": "Which server instance to query. Defaults to 'dev', which is typically preferred."
@@ -342,8 +351,11 @@
                         "instance": {
                             "type": "string",
                             "enum": [
+                                "dev",
                                 "prime",
-                                "dev"
+                                "shattered",
+                                "platinum",
+                                "test"
                             ],
                             "default": "dev",
                             "description": "Which server instance to query. Defaults to 'dev'."
@@ -403,6 +415,18 @@
                         "verb": {
                             "type": "string",
                             "description": "The verb name to look up (e.g. 'sit', '/mongen', 'quest', 'incant')."
+                        },
+                        "instance": {
+                            "type": "string",
+                            "enum": [
+                                "dev",
+                                "prime",
+                                "shattered",
+                                "platinum",
+                                "test"
+                            ],
+                            "default": "dev",
+                            "description": "Which server instance to query. Defaults to 'dev'."
                         }
                     }
                 }
@@ -426,6 +450,18 @@
                             "minimum": 1,
                             "maximum": 999999,
                             "description": "The global table ID to look up."
+                        },
+                        "instance": {
+                            "type": "string",
+                            "enum": [
+                                "dev",
+                                "prime",
+                                "shattered",
+                                "platinum",
+                                "test"
+                            ],
+                            "default": "dev",
+                            "description": "Which server instance to query. Defaults to 'dev'."
                         }
                     }
                 }

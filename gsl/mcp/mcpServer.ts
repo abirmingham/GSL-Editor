@@ -8,14 +8,20 @@
  * the game server.
  *
  * Configuration is via environment variables:
- *   GSL_DEV_ACCOUNT     – Play.net account name
- *   GSL_DEV_PASSWORD     – Play.net password
- *   GSL_DEV_INSTANCE     – Dev game code  (e.g. GS4D)
- *   GSL_DEV_CHARACTER    – Dev character name
- *   GSL_PRIME_INSTANCE   – Prime game code (e.g. GS3)
- *   GSL_PRIME_CHARACTER  – Prime character name
- *   GSL_AUTHOR           – Changelog author (e.g. AlexB/Nyxus)
- *   GSL_DOWNLOAD_PATH    – Path for temporary script files (defaults to OS tmpdir)
+ *   GSL_ACCOUNT            – Play.net account name
+ *   GSL_PASSWORD           – Play.net password
+ *   GSL_DEV_INSTANCE       – Dev game code  (e.g. GS4D)
+ *   GSL_DEV_CHARACTER      – Dev character name
+ *   GSL_PRIME_INSTANCE     – Prime game code (e.g. GS3)
+ *   GSL_PRIME_CHARACTER    – Prime character name
+ *   GSL_SHATTERED_INSTANCE – Shattered game code (e.g. GSF)
+ *   GSL_SHATTERED_CHARACTER– Shattered character name
+ *   GSL_PLATINUM_INSTANCE  – Platinum game code (e.g. GS4X)
+ *   GSL_PLATINUM_CHARACTER – Platinum character name
+ *   GSL_TEST_INSTANCE      – Test game code (e.g. GST)
+ *   GSL_TEST_CHARACTER     – Test character name
+ *   GSL_AUTHOR             – Changelog author (e.g. AlexB/Nyxus)
+ *   GSL_DOWNLOAD_PATH      – Path for temporary script files (defaults to OS tmpdir)
  *
  * Alternatively, supply GSL_CREDENTIALS_FILE pointing at a JSON file with
  * the same keys (camelCase).
@@ -33,6 +39,7 @@ import {
     ToolOrchestrator,
     ToolOrchestratorDeps,
     LoginCredentials,
+    GameInstance,
 } from "../toolOrchestrator.js";
 import { TOOL_DEFINITIONS, createMcpToolHandler } from "./mcpTools.js";
 
@@ -41,19 +48,64 @@ import { TOOL_DEFINITIONS, createMcpToolHandler } from "./mcpTools.js";
 // ---------------------------------------------------------------------------
 
 interface CredentialsFile {
-    devAccount?: string;
-    devPassword?: string;
+    account?: string;
+    password?: string;
     devInstance?: string;
     devCharacter?: string;
     primeInstance?: string;
     primeCharacter?: string;
+    shatteredInstance?: string;
+    shatteredCharacter?: string;
+    platinumInstance?: string;
+    platinumCharacter?: string;
+    testInstance?: string;
+    testCharacter?: string;
     author?: string;
     downloadPath?: string;
 }
 
+interface InstanceConfig {
+    envInstance: string;
+    envCharacter: string;
+    fileInstance: keyof CredentialsFile;
+    fileCharacter: keyof CredentialsFile;
+}
+
+const INSTANCE_CONFIGS: Record<GameInstance, InstanceConfig> = {
+    dev: {
+        envInstance: "GSL_DEV_INSTANCE",
+        envCharacter: "GSL_DEV_CHARACTER",
+        fileInstance: "devInstance",
+        fileCharacter: "devCharacter",
+    },
+    prime: {
+        envInstance: "GSL_PRIME_INSTANCE",
+        envCharacter: "GSL_PRIME_CHARACTER",
+        fileInstance: "primeInstance",
+        fileCharacter: "primeCharacter",
+    },
+    shattered: {
+        envInstance: "GSL_SHATTERED_INSTANCE",
+        envCharacter: "GSL_SHATTERED_CHARACTER",
+        fileInstance: "shatteredInstance",
+        fileCharacter: "shatteredCharacter",
+    },
+    platinum: {
+        envInstance: "GSL_PLATINUM_INSTANCE",
+        envCharacter: "GSL_PLATINUM_CHARACTER",
+        fileInstance: "platinumInstance",
+        fileCharacter: "platinumCharacter",
+    },
+    test: {
+        envInstance: "GSL_TEST_INSTANCE",
+        envCharacter: "GSL_TEST_CHARACTER",
+        fileInstance: "testInstance",
+        fileCharacter: "testCharacter",
+    },
+};
+
 function loadCredentials(): {
-    dev: LoginCredentials | undefined;
-    prime: LoginCredentials | undefined;
+    credentials: Map<GameInstance, LoginCredentials>;
     author: string | undefined;
     downloadPath: string;
 } {
@@ -69,40 +121,35 @@ function loadCredentials(): {
         }
     }
 
-    const devAccount = process.env.GSL_DEV_ACCOUNT ?? file.devAccount;
-    const devPassword = process.env.GSL_DEV_PASSWORD ?? file.devPassword;
-    const devInstance = process.env.GSL_DEV_INSTANCE ?? file.devInstance;
-    const devCharacter = process.env.GSL_DEV_CHARACTER ?? file.devCharacter;
-
-    const primeInstance = process.env.GSL_PRIME_INSTANCE ?? file.primeInstance;
-    const primeCharacter =
-        process.env.GSL_PRIME_CHARACTER ?? file.primeCharacter;
+    const account = process.env.GSL_ACCOUNT ?? file.account;
+    const password = process.env.GSL_PASSWORD ?? file.password;
 
     const author = process.env.GSL_AUTHOR ?? file.author;
     const downloadPath =
         process.env.GSL_DOWNLOAD_PATH ?? file.downloadPath ?? os.tmpdir();
 
-    const dev =
-        devAccount && devPassword && devInstance && devCharacter
-            ? {
-                  account: devAccount,
-                  password: devPassword,
-                  instance: devInstance,
-                  character: devCharacter,
-              }
-            : undefined;
+    const credentials = new Map<GameInstance, LoginCredentials>();
 
-    const prime =
-        devAccount && devPassword && primeInstance && primeCharacter
-            ? {
-                  account: devAccount,
-                  password: devPassword,
-                  instance: primeInstance,
-                  character: primeCharacter,
-              }
-            : undefined;
+    if (account && password) {
+        for (const [key, cfg] of Object.entries(INSTANCE_CONFIGS)) {
+            const instance =
+                process.env[cfg.envInstance] ??
+                (file[cfg.fileInstance] as string | undefined);
+            const character =
+                process.env[cfg.envCharacter] ??
+                (file[cfg.fileCharacter] as string | undefined);
+            if (instance && character) {
+                credentials.set(key as GameInstance, {
+                    account,
+                    password,
+                    instance,
+                    character,
+                });
+            }
+        }
+    }
 
-    return { dev, prime, author, downloadPath };
+    return { credentials, author, downloadPath };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,11 +157,10 @@ function loadCredentials(): {
 // ---------------------------------------------------------------------------
 
 async function main() {
-    const { dev, prime, author, downloadPath } = loadCredentials();
+    const { credentials, author, downloadPath } = loadCredentials();
 
     const deps: ToolOrchestratorDeps = {
-        getDevCredentials: async () => dev,
-        getPrimeCredentials: async () => prime,
+        getCredentials: async (instance) => credentials.get(instance),
         getCurrentAuthor: () => author,
         getDownloadLocation: () => downloadPath,
         console: {

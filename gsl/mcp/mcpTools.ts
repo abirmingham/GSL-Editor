@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createTwoFilesPatch, structuredPatch } from "diff";
-import { ToolOrchestrator } from "../toolOrchestrator";
+import { ToolOrchestrator, GameInstance } from "../toolOrchestrator";
 
 // ---------------------------------------------------------------------------
 // Tool definitions — derived from package.json (single source of truth)
@@ -110,9 +110,31 @@ function parseRequiredExistenceId(value: unknown): number {
 
 const VALID_SVF_VERBOSITIES = new Set(["Full", "NoTables", "SkipDefaults"]);
 
-type ScriptDataInstance = "dev" | "shattered" | "platinum" | "prime" | "test";
+const VALID_INSTANCES = new Set<GameInstance>([
+    "dev",
+    "prime",
+    "shattered",
+    "platinum",
+    "test",
+]);
 
-const SCRIPT_DATA_GAME_CODES: Record<ScriptDataInstance, string> = {
+function parseInstance(
+    value: unknown,
+    defaultValue: GameInstance,
+): GameInstance {
+    if (value === undefined || value === null) return defaultValue;
+    if (
+        typeof value !== "string" ||
+        !VALID_INSTANCES.has(value as GameInstance)
+    ) {
+        throw new Error(
+            `Invalid instance '${value}'. Must be one of: ${[...VALID_INSTANCES].join(", ")}.`,
+        );
+    }
+    return value as GameInstance;
+}
+
+const SCRIPT_DATA_GAME_CODES: Record<GameInstance, string> = {
     dev: "GS4D",
     shattered: "GSF",
     prime: "GS4",
@@ -202,8 +224,7 @@ export function createMcpToolHandler(
             return async (args) => {
                 try {
                     const roomId = parseRequiredRoomId(args.roomId);
-                    const instance =
-                        (args.instance as "prime" | "dev") ?? "dev";
+                    const instance = parseInstance(args.instance, "dev");
                     const output = await orchestrator.getRoomData(
                         roomId,
                         instance,
@@ -227,8 +248,7 @@ export function createMcpToolHandler(
                     const existenceId = parseRequiredExistenceId(
                         args.existenceId,
                     );
-                    const instance =
-                        (args.instance as "prime" | "dev") ?? "dev";
+                    const instance = parseInstance(args.instance, "dev");
                     const output = await orchestrator.getExistenceData(
                         existenceId,
                         instance,
@@ -265,8 +285,7 @@ export function createMcpToolHandler(
                             `Invalid verbosity '${verbosity}'. Must be Full, NoTables, or SkipDefaults.`,
                         );
                     }
-                    const instance =
-                        (args.instance as "prime" | "dev") ?? "dev";
+                    const instance = parseInstance(args.instance, "dev");
                     const output = await orchestrator.getPlayerVarfields(
                         playerName.trim(),
                         verbosity,
@@ -289,8 +308,7 @@ export function createMcpToolHandler(
             return async (args) => {
                 try {
                     const command = (args.command as string)?.trim() ?? "";
-                    const instance =
-                        (args.instance as "prime" | "dev") ?? "dev";
+                    const instance = parseInstance(args.instance, "dev");
                     const output = await orchestrator.executeAgentCommand(
                         command,
                         instance,
@@ -312,8 +330,7 @@ export function createMcpToolHandler(
             return async (args) => {
                 try {
                     const scriptId = parseRequiredScriptNumber(args.scriptId);
-                    const instance =
-                        (args.instance as ScriptDataInstance) ?? "dev";
+                    const instance = parseInstance(args.instance, "dev");
                     const gameCode = SCRIPT_DATA_GAME_CODES[instance];
                     if (!gameCode) {
                         throw new Error(
@@ -346,7 +363,11 @@ export function createMcpToolHandler(
                             "Missing verb. Provide the verb name to look up.",
                         );
                     }
-                    const output = await orchestrator.getVerbData(verb);
+                    const instance = parseInstance(args.instance, "dev");
+                    const output = await orchestrator.getVerbData(
+                        verb,
+                        instance,
+                    );
                     if (!output || output.trim().length === 0) {
                         return textResult(
                             `Verb '${verb}': No data returned. The verb may not exist.`,
@@ -364,8 +385,11 @@ export function createMcpToolHandler(
             return async (args) => {
                 try {
                     const tableId = parseRequiredScriptNumber(args.tableId);
-                    const output =
-                        await orchestrator.getGlobalTableData(tableId);
+                    const instance = parseInstance(args.instance, "dev");
+                    const output = await orchestrator.getGlobalTableData(
+                        tableId,
+                        instance,
+                    );
                     if (!output || output.trim().length === 0) {
                         return textResult(
                             `Table ${tableId}: No data returned. The table may not exist.`,

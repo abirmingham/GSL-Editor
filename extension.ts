@@ -464,29 +464,39 @@ export class VSCodeIntegration {
         this.loggingEnabled = false;
 
         this.toolOrchestrator = new ToolOrchestrator({
-            getDevCredentials: async () => {
+            getCredentials: async (instance) => {
                 const account =
                     this.context.globalState.get<string>(GSLX_DEV_ACCOUNT);
-                const instance =
-                    this.context.globalState.get<string>(GSLX_DEV_INSTANCE);
-                const character =
-                    this.context.globalState.get<string>(GSLX_DEV_CHARACTER);
                 const password =
                     await this.context.secrets.get(GSLX_DEV_PASSWORD);
-                if (!account || !instance || !character || !password) return;
-                return { account, instance, character, password };
-            },
-            getPrimeCredentials: async () => {
-                const account =
-                    this.context.globalState.get<string>(GSLX_DEV_ACCOUNT);
-                const instance =
-                    this.context.globalState.get<string>(GSLX_PRIME_INSTANCE);
-                const character =
-                    this.context.globalState.get<string>(GSLX_PRIME_CHARACTER);
-                const password =
-                    await this.context.secrets.get(GSLX_DEV_PASSWORD);
-                if (!account || !instance || !character || !password) return;
-                return { account, instance, character, password };
+                if (!account || !password) return;
+
+                let gameInstance: string | undefined;
+                let character: string | undefined;
+                if (instance === "dev") {
+                    gameInstance =
+                        this.context.globalState.get<string>(GSLX_DEV_INSTANCE);
+                    character =
+                        this.context.globalState.get<string>(
+                            GSLX_DEV_CHARACTER,
+                        );
+                } else if (instance === "prime") {
+                    gameInstance =
+                        this.context.globalState.get<string>(
+                            GSLX_PRIME_INSTANCE,
+                        );
+                    character =
+                        this.context.globalState.get<string>(
+                            GSLX_PRIME_CHARACTER,
+                        );
+                }
+                if (!gameInstance || !character) return;
+                return {
+                    account,
+                    instance: gameInstance,
+                    character,
+                    password,
+                };
             },
             getCurrentAuthor: () =>
                 this.context.globalState.get(GSLX_CURRENT_AUTHOR),
