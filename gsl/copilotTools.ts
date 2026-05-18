@@ -1097,7 +1097,7 @@ export function registerCopilotTools(
             new CheckCompilerErrorsTool(),
         ),
         vscode.lm.registerTool(
-            "gsl-get-current-author",
+            "gsl_get_current_author",
             new GetCurrentAuthorTool(),
         ),
         vscode.lm.registerTool("gsl_get_room_data", new GetRoomDataTool()),

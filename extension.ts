@@ -41,7 +41,6 @@ import {
 import { formatDate } from "./gsl/util/dateUtil";
 import { OutOfDateButtonManager } from "./gsl/status_bar/scriptOutOfDateButton";
 import { scriptNumberFromFileName } from "./gsl/util/scriptUtil";
-import { throwOnControlCharacters } from "./gsl/strings";
 import {
     GSLX_AUTOMATIC_DOWNLOADS,
     GSLX_CURRENT_AUTHOR,
@@ -72,6 +71,7 @@ import {
 } from "./gsl/commands/syncAgentPrompts";
 import { runCopilotCodeReviewCommand } from "./gsl/commands/copilotCodeReview";
 import * as primeService from "./gsl/prime/primeService";
+import { ToolOrchestrator } from "./gsl/toolOrchestrator";
 
 const rx_script_number = /^\d{1,6}$/;
 const rx_script_number_in_filename = /(\d+)\.gsl/;
@@ -407,6 +407,8 @@ export class VSCodeIntegration {
     private frozenScriptWarningManager: FrozenScriptWarningManager | undefined;
     private outOfDateButtonManager: OutOfDateButtonManager;
 
+    private toolOrchestrator: ToolOrchestrator;
+
     constructor(context: ExtensionContext) {
         this.context = context;
 
@@ -460,6 +462,43 @@ export class VSCodeIntegration {
         this.outputChannel = window.createOutputChannel("GSL Editor (debug)");
 
         this.loggingEnabled = false;
+
+        this.toolOrchestrator = new ToolOrchestrator({
+            getDevCredentials: async () => {
+                const account =
+                    this.context.globalState.get<string>(GSLX_DEV_ACCOUNT);
+                const instance =
+                    this.context.globalState.get<string>(GSLX_DEV_INSTANCE);
+                const character =
+                    this.context.globalState.get<string>(GSLX_DEV_CHARACTER);
+                const password =
+                    await this.context.secrets.get(GSLX_DEV_PASSWORD);
+                if (!account || !instance || !character || !password) return;
+                return { account, instance, character, password };
+            },
+            getPrimeCredentials: async () => {
+                const account =
+                    this.context.globalState.get<string>(GSLX_DEV_ACCOUNT);
+                const instance =
+                    this.context.globalState.get<string>(GSLX_PRIME_INSTANCE);
+                const character =
+                    this.context.globalState.get<string>(GSLX_PRIME_CHARACTER);
+                const password =
+                    await this.context.secrets.get(GSLX_DEV_PASSWORD);
+                if (!account || !instance || !character || !password) return;
+                return { account, instance, character, password };
+            },
+            getCurrentAuthor: () =>
+                this.context.globalState.get(GSLX_CURRENT_AUTHOR),
+            getDownloadLocation: () => GSLExtension.getDownloadLocation(),
+            console: {
+                log: (...args: any) => {
+                    this.outputChannel.append(
+                        `[console(log): ${args.join(" ")}]\r\n`,
+                    );
+                },
+            },
+        });
 
         this.registerCommands();
         this.initializeComponents();
@@ -1215,10 +1254,7 @@ export class VSCodeIntegration {
     async fetchPrimeScript(
         script: number,
     ): Promise<{ content: string; isNew: boolean }> {
-        return primeService.fetchPrimeScript(
-            script,
-            this.getPrimeServiceDependencies(),
-        );
+        return this.toolOrchestrator.fetchPrimeScript(script);
     }
 
     async fetchPrimeAndDevScriptDiff(script: number): Promise<{
@@ -1227,10 +1263,7 @@ export class VSCodeIntegration {
         isNewOnPrime: boolean;
         isNewOnDev: boolean;
     }> {
-        return primeService.fetchPrimeAndDevScriptDiff(
-            script,
-            this.getPrimeServiceDependencies(),
-        );
+        return this.toolOrchestrator.fetchPrimeAndDevScriptDiff(script);
     }
 
     async uploadScriptForAgent(
@@ -1266,86 +1299,18 @@ export class VSCodeIntegration {
         });
     }
 
-    private async executeShowCommand(
-        client: EditorClientInterface,
-        command: string,
-        captureStart: RegExp,
-        captureEnd: RegExp,
-        abortPattern: RegExp,
-        includeStartLine: boolean,
-        includeEndLine: boolean,
-    ): Promise<string> {
-        const TIMEOUT_MS = 15000;
-        const lines = await client.executeCommand(command, {
-            captureStart,
-            captureEnd,
-            abortPattern,
-            timeoutMillis: TIMEOUT_MS,
-            includeStartLine,
-            includeEndLine,
-        });
-        return lines.join("\n");
-    }
-
-    private async executeShowCommandOnInstance(
-        instance: "prime" | "dev",
-        command: string,
-        captureStart: RegExp,
-        captureEnd: RegExp,
-        abortPattern: RegExp,
-        { includeStartLine = true, includeEndLine = true } = {},
-    ): Promise<string> {
-        const task = (client: EditorClientInterface) =>
-            this.executeShowCommand(
-                client,
-                command,
-                captureStart,
-                captureEnd,
-                abortPattern,
-                includeStartLine,
-                includeEndLine,
-            );
-
-        if (instance === "prime") {
-            return primeService.doPrimeEditorClientTask(
-                task,
-                this.getPrimeServiceDependencies(),
-            );
-        }
-
-        const result = await this.withEditorClient(task);
-        if (result === undefined) {
-            throw new Error(
-                "Dev server not configured. Run 'GSL: User Setup' first.",
-            );
-        }
-        return result;
-    }
-
     async getExistenceData(
         existenceId: number,
         instance: "prime" | "dev",
     ): Promise<string> {
-        return this.executeShowCommandOnInstance(
-            instance,
-            `/se ${existenceId}`,
-            /^Showing /,
-            /^Flags:/,
-            /^Existence ".*?" not found\./,
-        );
+        return this.toolOrchestrator.getExistenceData(existenceId, instance);
     }
 
     async getRoomData(
         roomId: number,
         instance: "prime" | "dev",
     ): Promise<string> {
-        return this.executeShowCommandOnInstance(
-            instance,
-            `/sr ${roomId}`,
-            /^Showing room #\d+/,
-            /^Flags:/,
-            /does not exist or could not be loaded for some reason/,
-        );
+        return this.toolOrchestrator.getRoomData(roomId, instance);
     }
 
     async getPlayerVarfields(
@@ -1353,13 +1318,10 @@ export class VSCodeIntegration {
         verbosity: "Full" | "NoTables" | "SkipDefaults",
         instance: "prime" | "dev",
     ): Promise<string> {
-        throwOnControlCharacters(playerName);
-        return this.executeShowCommandOnInstance(
+        return this.toolOrchestrator.getPlayerVarfields(
+            playerName,
+            verbosity,
             instance,
-            `/svf ${playerName} ${verbosity}`,
-            /^Variable Fields Attached to player /,
-            /^Flags:/,
-            /^Player .+ not found$/,
         );
     }
 
@@ -1367,80 +1329,19 @@ export class VSCodeIntegration {
         command: string,
         instance: "prime" | "dev",
     ): Promise<string> {
-        throwOnControlCharacters(command);
-        const fullCommand = command ? `/agent ${command}` : `/agent`;
-        return this.executeShowCommandOnInstance(
-            instance,
-            fullCommand,
-            /^<<<beginning of output>>>/,
-            /^<<<end of output>>>/,
-            /(?!)/,
-            { includeStartLine: false, includeEndLine: false },
-        );
+        return this.toolOrchestrator.executeAgentCommand(command, instance);
     }
 
     async getVerbData(verb: string): Promise<string> {
-        throwOnControlCharacters(verb);
-        const task = (client: EditorClientInterface) =>
-            this.executeShowCommand(
-                client,
-                `/sv ${verb}`,
-                /^Information about the verb /,
-                /^On /,
-                /does not exist\.$/,
-                true,
-                true,
-            );
-
-        const result = await this.withEditorClient(task);
-        if (result === undefined) {
-            throw new Error(
-                "Dev server not configured. Run 'GSL: User Setup' first.",
-            );
-        }
-        return result;
+        return this.toolOrchestrator.getVerbData(verb);
     }
 
     async getScriptData(scriptId: number, gameCode: string): Promise<string> {
-        const task = (client: EditorClientInterface) =>
-            this.executeShowCommand(
-                client,
-                `/ss ${scriptId} ${gameCode} raw`,
-                /^Game: /,
-                /^On |^Unspecified Date/,
-                /^Invalid script/,
-                true,
-                true,
-            );
-
-        const result = await this.withEditorClient(task);
-        if (result === undefined) {
-            throw new Error(
-                "This tool is not available on non-dev servers. Run 'GSL: User Setup' to configure a dev server connection.",
-            );
-        }
-        return result;
+        return this.toolOrchestrator.getScriptData(scriptId, gameCode);
     }
 
     async getGlobalTableData(tableId: number): Promise<string> {
-        const task = (client: EditorClientInterface) =>
-            this.executeShowCommand(
-                client,
-                `/sl ${tableId}`,
-                /^Table \[\d+\] Header Information/,
-                /^\s+Table Type:/,
-                /^ERROR:.*Trouble loading table/,
-                true,
-                true,
-            );
-
-        const result = await this.withEditorClient(task);
-        if (result === undefined) {
-            throw new Error(
-                "Dev server not configured. Run 'GSL: User Setup' first.",
-            );
-        }
-        return result;
+        return this.toolOrchestrator.getGlobalTableData(tableId);
     }
 
     private registerCommands() {
