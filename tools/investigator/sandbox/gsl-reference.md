@@ -1,0 +1,1 @@
+../../../../GSL-Editor-Agents/src/AGENTS.md

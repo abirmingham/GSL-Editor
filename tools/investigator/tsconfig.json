@@ -1,0 +1,10 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "outDir": ".",
+        "rootDir": ".",
+        "skipLibCheck": true
+    },
+    "include": ["main.ts", "loggerDaemon.ts", "discord-tools-mcp.ts", "src"],
+    "exclude": ["node_modules"]
+}

@@ -1,0 +1,6 @@
+**/*.js
+main.out
+.env
+node_modules/
+.vscode/
+sandbox/bot-source/
