@@ -61,6 +61,7 @@
         "bundle:extension": "esbuild extension.ts --bundle --outfile=extension.js --external:vscode --format=cjs --platform=node",
         "bundle:mcp": "esbuild gsl/mcp/mcpServer.ts --bundle --outfile=gsl/mcp/mcpServer.bundle.js --external:vscode --format=cjs --platform=node",
         "bundle:dev-upload": "esbuild gsl/devUpload/devUploadCli.ts --bundle --outfile=gsl/devUpload/devUpload.bundle.js --external:vscode --format=cjs --platform=node",
+        "dev-upload": "node gsl/devUpload/devUpload.bundle.js interactive",
         "watch": "tsc --watch",
         "test": "node test/runTests.js",
         "format": "prettier --write \"**/*.ts\""
