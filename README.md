@@ -306,3 +306,16 @@ checked against what the list showed and against `/freeze list csv`; a frozen
 or locked script is refused. The session sends nothing while you read the
 list, so if the server drops an idle connection in that time the run fails
 with nothing uploaded; run it again.
+
+The double dash argument in that example belongs to `npm run`, which passes
+everything after it to the tool. The tool has a double dash argument of its
+own: `--` ends the tool's options, and every word after it is a file name,
+even one that starts with a dash. A launcher that runs the bundle directly
+puts the file names after it:
+
+```sh
+node devUpload.bundle.js interactive --config ~/.gsl/loginConfig.upload.json -- S12345.gsl S12346.gsl
+```
+
+The output is free text for a person, not a format. The exit code is the
+contract: 0 only when every script was uploaded and compiled, 1 otherwise.
